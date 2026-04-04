@@ -2,6 +2,7 @@ import SwiftUI
 import Combine
 import PhotosUI
 import UIKit
+import PDFKit
 
 extension String {
     var localized: String {
@@ -195,9 +196,17 @@ enum BildSpeicher {
 enum PDFExport {
     static func dateiURL(fuer baustelle: Baustelle) -> URL {
         let saubererName = baustelle.name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: " ", with: "_")
             .replacingOccurrences(of: "/", with: "-")
-        let dateiname = "Baustellenbericht_\(saubererName).pdf"
+            .replacingOccurrences(of: "\\", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm"
+        let datum = formatter.string(from: Date())
+
+        let dateiname = "BauPilot_Baustellenbericht_\(saubererName)_\(datum).pdf"
         return FileManager.default.temporaryDirectory.appendingPathComponent(dateiname)
     }
 
@@ -214,57 +223,58 @@ enum PDFExport {
 
         let pageWidth: CGFloat = 595
         let pageHeight: CGFloat = 842
-        let margin: CGFloat = 40
+        let margin: CGFloat = 36
+        let headerHeight: CGFloat = 44
+        let footerReserved: CGFloat = 34
         let contentWidth = pageWidth - (margin * 2)
+        let bottomLimit = pageHeight - margin - footerReserved
 
-        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight))
+        let renderer = UIGraphicsPDFRenderer(
+            bounds: CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
+        )
 
         do {
             try renderer.writePDF(to: url) { context in
-                var y: CGFloat = margin
+                var y: CGFloat = margin + headerHeight + 16
                 var seitenNummer = 1
 
-                func zeichneSeitenkopf(_ baustellenName: String) {
-                    let kopfText = String(format: "Baustelle: %@".localized, baustellenName)
+                let sortierteEintraege = baustelle.eintraege.sorted { $0.erstelltAm > $1.erstelltAm }
+                let anzahlOffen = sortierteEintraege.filter { $0.status == .offen }.count
+                let anzahlInArbeit = sortierteEintraege.filter { $0.status == .inArbeit }.count
+                let anzahlErledigt = sortierteEintraege.filter { $0.status == .erledigt }.count
+
+                func textHoehe(_ text: String, font: UIFont, width: CGFloat) -> CGFloat {
+                    let style = NSMutableParagraphStyle()
+                    style.lineBreakMode = .byWordWrapping
+                    style.alignment = .left
+
                     let attrs: [NSAttributedString.Key: Any] = [
-                        .font: UIFont.systemFont(ofSize: 10),
-                        .foregroundColor: UIColor.darkGray
+                        .font: font,
+                        .paragraphStyle: style
                     ]
-                    NSAttributedString(string: kopfText, attributes: attrs).draw(
-                        in: CGRect(x: margin, y: 16, width: 300, height: 20)
+
+                    let rect = NSAttributedString(string: text, attributes: attrs).boundingRect(
+                        with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                        options: [.usesLineFragmentOrigin, .usesFontLeading],
+                        context: nil
                     )
+
+                    return ceil(rect.height)
                 }
 
-                func zeichneSeitenfuss() {
-                    let fussText = String(format: "Seite %d".localized, seitenNummer)
-                    let attrs: [NSAttributedString.Key: Any] = [
-                        .font: UIFont.systemFont(ofSize: 10),
-                        .foregroundColor: UIColor.darkGray
-                    ]
-                    NSAttributedString(string: fussText, attributes: attrs).draw(
-                        in: CGRect(x: pageWidth - margin - 80, y: pageHeight - 24, width: 80, height: 16)
-                    )
-                }
-
-                func neueSeiteWennNoetig(_ benoetigteHoehe: CGFloat) {
-                    if y + benoetigteHoehe > pageHeight - margin - 20 {
-                        zeichneSeitenfuss()
-                        context.beginPage()
-                        seitenNummer += 1
-                        zeichneSeitenkopf(baustelle.name)
-                        y = margin
-                    }
-                }
-
+                @discardableResult
                 func zeichneText(
                     _ text: String,
                     font: UIFont,
                     color: UIColor = .black,
-                    rect: CGRect
+                    x: CGFloat,
+                    y: CGFloat,
+                    width: CGFloat,
+                    alignment: NSTextAlignment = .left
                 ) -> CGFloat {
                     let style = NSMutableParagraphStyle()
                     style.lineBreakMode = .byWordWrapping
-                    style.alignment = .left
+                    style.alignment = alignment
 
                     let attrs: [NSAttributedString.Key: Any] = [
                         .font: font,
@@ -272,141 +282,464 @@ enum PDFExport {
                         .paragraphStyle: style
                     ]
 
-                    let attributed = NSAttributedString(string: text, attributes: attrs)
-                    let size = attributed.boundingRect(
-                        with: CGSize(width: rect.width, height: .greatestFiniteMagnitude),
-                        options: [.usesLineFragmentOrigin, .usesFontLeading],
-                        context: nil
-                    )
-
-                    let drawRect = CGRect(
-                        x: rect.minX,
-                        y: rect.minY,
-                        width: rect.width,
-                        height: ceil(size.height)
-                    )
-                    attributed.draw(in: drawRect)
-                    return ceil(size.height)
+                    let hoehe = textHoehe(text, font: font, width: width)
+                    let rect = CGRect(x: x, y: y, width: width, height: hoehe)
+                    NSAttributedString(string: text, attributes: attrs).draw(in: rect)
+                    return hoehe
                 }
 
-                func zeichneTrennlinie(y: CGFloat) {
+                func zeichneLinie(y: CGFloat, farbe: UIColor = .systemGray4, dicke: CGFloat = 1) {
                     let path = UIBezierPath()
                     path.move(to: CGPoint(x: margin, y: y))
                     path.addLine(to: CGPoint(x: pageWidth - margin, y: y))
-                    UIColor.systemGray4.setStroke()
-                    path.lineWidth = 1
+                    path.lineWidth = dicke
+                    farbe.setStroke()
                     path.stroke()
                 }
 
-                context.beginPage()
-                zeichneSeitenkopf(baustelle.name)
+                func zeichneAbgerundeteBox(rect: CGRect, fill: UIColor, stroke: UIColor? = nil, radius: CGFloat = 14) {
+                    let path = UIBezierPath(roundedRect: rect, cornerRadius: radius)
+                    fill.setFill()
+                    path.fill()
 
-                let titelHoehe = zeichneText(
-                    "BauPilot – Baustellenbericht".localized,
-                    font: .boldSystemFont(ofSize: 24),
-                    rect: CGRect(x: margin, y: y, width: contentWidth, height: 100)
-                )
-                y += titelHoehe + 10
-
-                let infoText = """
-                \(String(format: "Baustelle: %@".localized, baustelle.name))
-                \(String(format: "Exportiert am: %@".localized, datumText(Date())))
-                \(String(format: "Anzahl Einträge: %d".localized, baustelle.eintraege.count))
-                """
-
-                let infoHoehe = zeichneText(
-                    infoText,
-                    font: .systemFont(ofSize: 14),
-                    color: .darkGray,
-                    rect: CGRect(x: margin, y: y, width: contentWidth, height: 120)
-                )
-                y += infoHoehe + 20
-
-                zeichneTrennlinie(y: y)
-                y += 20
-
-                let sortierteEintraege = baustelle.eintraege.sorted { $0.erstelltAm > $1.erstelltAm }
-
-                if sortierteEintraege.isEmpty {
-                    _ = zeichneText(
-                        "Keine Einträge vorhanden.".localized,
-                        font: .systemFont(ofSize: 15),
-                        color: .darkGray,
-                        rect: CGRect(x: margin, y: y, width: contentWidth, height: 60)
-                    )
-                } else {
-                    for (index, eintrag) in sortierteEintraege.enumerated() {
-                        let style = NSMutableParagraphStyle()
-                        style.lineBreakMode = .byWordWrapping
-
-                        let attrs: [NSAttributedString.Key: Any] = [
-                            .font: UIFont.systemFont(ofSize: 14),
-                            .paragraphStyle: style
-                        ]
-
-                        let blockText = """
-                        \(index + 1). \(eintrag.titel)
-
-                        \(String(format: "Kategorie: %@".localized, eintrag.kategorie.anzeigeText))
-                        \(String(format: "Status: %@".localized, eintrag.status.anzeigeText))
-                        \(String(format: "Priorität: %@".localized, eintrag.prioritaet.anzeigeText))
-                        \(String(format: "Erstellt am: %@".localized, datumText(eintrag.erstelltAm)))
-
-                        \("Beschreibung:".localized)
-                        \(eintrag.beschreibung)
-                        """
-
-                        let attributed = NSAttributedString(string: blockText, attributes: attrs)
-                        let neededHeight = attributed.boundingRect(
-                            with: CGSize(width: contentWidth, height: .greatestFiniteMagnitude),
-                            options: [.usesLineFragmentOrigin, .usesFontLeading],
-                            context: nil
-                        ).height + 30
-
-                        neueSeiteWennNoetig(neededHeight)
-
-                        let titelBlockHoehe = zeichneText(
-                            "\(index + 1). \(eintrag.titel)",
-                            font: .boldSystemFont(ofSize: 17),
-                            rect: CGRect(x: margin, y: y, width: contentWidth, height: 60)
-                        )
-                        y += titelBlockHoehe + 8
-
-                        let metaText = """
-                        \(String(format: "Kategorie: %@".localized, eintrag.kategorie.anzeigeText))
-                        \(String(format: "Status: %@".localized, eintrag.status.anzeigeText))
-                        \(String(format: "Priorität: %@".localized, eintrag.prioritaet.anzeigeText))
-                        \(String(format: "Erstellt am: %@".localized, datumText(eintrag.erstelltAm)))
-                        """
-
-                        let metaHoehe = zeichneText(
-                            metaText,
-                            font: .systemFont(ofSize: 13),
-                            color: .darkGray,
-                            rect: CGRect(x: margin, y: y, width: contentWidth, height: 100)
-                        )
-                        y += metaHoehe + 10
-
-                        _ = zeichneText(
-                            "Beschreibung:".localized,
-                            font: .boldSystemFont(ofSize: 14),
-                            rect: CGRect(x: margin, y: y, width: contentWidth, height: 30)
-                        )
-                        y += 22
-
-                        let beschreibungHoehe = zeichneText(
-                            eintrag.beschreibung,
-                            font: .systemFont(ofSize: 14),
-                            rect: CGRect(x: margin, y: y, width: contentWidth, height: 500)
-                        )
-                        y += beschreibungHoehe + 18
-
-                        zeichneTrennlinie(y: y)
-                        y += 18
+                    if let stroke {
+                        stroke.setStroke()
+                        path.lineWidth = 1
+                        path.stroke()
                     }
                 }
 
-                zeichneSeitenfuss()
+                func statusUIColor(_ status: BaustellenStatus) -> UIColor {
+                    switch status {
+                    case .offen: return .systemRed
+                    case .inArbeit: return .systemOrange
+                    case .erledigt: return .systemGreen
+                    }
+                }
+
+                func prioritaetUIColor(_ prioritaet: BaustellenPrioritaet) -> UIColor {
+                    switch prioritaet {
+                    case .niedrig: return .systemBlue
+                    case .mittel: return .systemOrange
+                    case .hoch: return .systemRed
+                    }
+                }
+
+                func zeichneHeader() {
+                    let title = "BauPilot – Baustellenbericht".localized
+                    let subtitle = String(format: "Baustelle: %@".localized, baustelle.name)
+
+                    _ = zeichneText(
+                        title,
+                        font: .boldSystemFont(ofSize: 20),
+                        color: .black,
+                        x: margin,
+                        y: margin - 2,
+                        width: contentWidth * 0.70
+                    )
+
+                    _ = zeichneText(
+                        subtitle,
+                        font: .systemFont(ofSize: 11),
+                        color: .darkGray,
+                        x: margin,
+                        y: margin + 22,
+                        width: contentWidth * 0.70
+                    )
+
+                    let badgeRect = CGRect(x: pageWidth - margin - 104, y: margin + 2, width: 104, height: 24)
+                    zeichneAbgerundeteBox(
+                        rect: badgeRect,
+                        fill: UIColor.systemBlue.withAlphaComponent(0.10),
+                        radius: 12
+                    )
+
+                    _ = zeichneText(
+                        "BauPilot PDF".localized,
+                        font: .boldSystemFont(ofSize: 10),
+                        color: .systemBlue,
+                        x: badgeRect.minX,
+                        y: badgeRect.minY + 6,
+                        width: badgeRect.width,
+                        alignment: .center
+                    )
+
+                    zeichneLinie(y: margin + headerHeight)
+                }
+
+                func zeichneFooter() {
+                    let leftText = "BauPilot".localized
+                    let rightText = String(format: "Seite %d".localized, seitenNummer)
+
+                    _ = zeichneText(
+                        leftText,
+                        font: .systemFont(ofSize: 10),
+                        color: .darkGray,
+                        x: margin,
+                        y: pageHeight - margin + 2,
+                        width: 120
+                    )
+
+                    _ = zeichneText(
+                        rightText,
+                        font: .systemFont(ofSize: 10),
+                        color: .darkGray,
+                        x: pageWidth - margin - 90,
+                        y: pageHeight - margin + 2,
+                        width: 90,
+                        alignment: .right
+                    )
+                }
+
+                func beginneNeueSeite() {
+                    zeichneFooter()
+                    context.beginPage()
+                    seitenNummer += 1
+                    zeichneHeader()
+                    y = margin + headerHeight + 16
+                }
+
+                func neueSeiteWennNoetig(_ benoetigteHoehe: CGFloat) {
+                    if y + benoetigteHoehe > bottomLimit {
+                        beginneNeueSeite()
+                    }
+                }
+
+                func zeichneInfoBlock() {
+                    let boxRect = CGRect(x: margin, y: y, width: contentWidth, height: 118)
+                    zeichneAbgerundeteBox(
+                        rect: boxRect,
+                        fill: UIColor.secondarySystemBackground,
+                        stroke: UIColor.systemGray5
+                    )
+
+                    let leftX = boxRect.minX + 16
+                    let topY = boxRect.minY + 14
+                    let columnWidth = (boxRect.width - 32) / 2
+
+                    _ = zeichneText(
+                        String(format: "Baustelle: %@".localized, baustelle.name),
+                        font: .boldSystemFont(ofSize: 13),
+                        color: .black,
+                        x: leftX,
+                        y: topY,
+                        width: columnWidth
+                    )
+
+                    _ = zeichneText(
+                        String(format: "Exportiert am: %@".localized, datumText(Date())),
+                        font: .systemFont(ofSize: 12),
+                        color: .darkGray,
+                        x: leftX,
+                        y: topY + 24,
+                        width: columnWidth
+                    )
+
+                    _ = zeichneText(
+                        String(format: "Anzahl Einträge: %d".localized, sortierteEintraege.count),
+                        font: .systemFont(ofSize: 12),
+                        color: .darkGray,
+                        x: leftX,
+                        y: topY + 48,
+                        width: columnWidth
+                    )
+
+                    _ = zeichneText(
+                        String(format: "Offen: %d".localized, anzahlOffen),
+                        font: .systemFont(ofSize: 12),
+                        color: .systemRed,
+                        x: leftX + columnWidth,
+                        y: topY,
+                        width: columnWidth - 10
+                    )
+
+                    _ = zeichneText(
+                        String(format: "In Arbeit: %d".localized, anzahlInArbeit),
+                        font: .systemFont(ofSize: 12),
+                        color: .systemOrange,
+                        x: leftX + columnWidth,
+                        y: topY + 24,
+                        width: columnWidth - 10
+                    )
+
+                    _ = zeichneText(
+                        String(format: "Erledigt: %d".localized, anzahlErledigt),
+                        font: .systemFont(ofSize: 12),
+                        color: .systemGreen,
+                        x: leftX + columnWidth,
+                        y: topY + 48,
+                        width: columnWidth - 10
+                    )
+
+                    y += boxRect.height + 22
+                }
+
+                func sichtbareFotoPfade(_ pfade: [String]) -> [String] {
+                    Array(pfade.prefix(4))
+                }
+
+                func berechneFotoHoehe(anzahl: Int) -> CGFloat {
+                    let sichtbareAnzahl = min(anzahl, 4)
+                    guard sichtbareAnzahl > 0 else { return 0 }
+
+                    let bildHoehe: CGFloat = 130
+                    let spacing: CGFloat = 8
+
+                    if sichtbareAnzahl == 1 || sichtbareAnzahl == 2 {
+                        return bildHoehe
+                    } else {
+                        return (bildHoehe * 2) + spacing
+                    }
+                }
+
+                func zeichneFotoBereich(
+                    pfade: [String],
+                    startY: CGFloat,
+                    inhaltX: CGFloat,
+                    inhaltBreite: CGFloat
+                ) -> CGFloat {
+                    let bilder = sichtbareFotoPfade(pfade)
+                    guard !bilder.isEmpty else { return 0 }
+
+                    let spacing: CGFloat = 8
+                    let bildHoehe: CGFloat = 130
+
+                    func zeichneEinzelbild(_ image: UIImage, in rect: CGRect) {
+                        guard let cgContext = UIGraphicsGetCurrentContext() else {
+                            image.draw(in: rect)
+                            return
+                        }
+
+                        cgContext.saveGState()
+                        let clipPath = UIBezierPath(roundedRect: rect, cornerRadius: 10)
+                        clipPath.addClip()
+                        image.draw(in: rect)
+                        cgContext.restoreGState()
+
+                        UIColor.systemGray5.setStroke()
+                        let border = UIBezierPath(roundedRect: rect, cornerRadius: 10)
+                        border.lineWidth = 1
+                        border.stroke()
+                    }
+
+                    if bilder.count == 1 {
+                        if let image = BildSpeicher.bildLaden(pfad: bilder[0]) {
+                            let rect = CGRect(x: inhaltX, y: startY, width: inhaltBreite, height: bildHoehe)
+                            zeichneEinzelbild(image, in: rect)
+                        }
+                        return bildHoehe
+                    }
+
+                    let bildBreite = (inhaltBreite - spacing) / 2
+                    var aktuelleY = startY
+
+                    for rowStart in stride(from: 0, to: bilder.count, by: 2) {
+                        let rowEnd = min(rowStart + 2, bilder.count)
+                        let zeile = Array(bilder[rowStart..<rowEnd])
+
+                        for (index, pfad) in zeile.enumerated() {
+                            if let image = BildSpeicher.bildLaden(pfad: pfad) {
+                                let x = inhaltX + CGFloat(index) * (bildBreite + spacing)
+                                let rect = CGRect(x: x, y: aktuelleY, width: bildBreite, height: bildHoehe)
+                                zeichneEinzelbild(image, in: rect)
+                            }
+                        }
+
+                        aktuelleY += bildHoehe + spacing
+                    }
+
+                    let zeilenAnzahl = Int(ceil(Double(bilder.count) / 2.0))
+                    return CGFloat(zeilenAnzahl) * bildHoehe + CGFloat(max(0, zeilenAnzahl - 1)) * spacing
+                }
+
+                func zeichneEintragBlock(_ eintrag: BaustellenEintrag, index: Int) {
+                    let titel = "\(index + 1). \(eintrag.titel)"
+                    let meta1 = "\(String(format: "Kategorie: %@".localized, eintrag.kategorie.anzeigeText))    •    \(String(format: "Status: %@".localized, eintrag.status.anzeigeText))"
+                    let meta2 = "\(String(format: "Priorität: %@".localized, eintrag.prioritaet.anzeigeText))    •    \(String(format: "Erstellt am: %@".localized, datumText(eintrag.erstelltAm)))"
+
+                    let beschreibungTitel = "Beschreibung".localized
+                    let beschreibungText = eintrag.beschreibung.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "-".localized
+                        : eintrag.beschreibung
+
+                    let fotosTitel = "Fotos".localized
+
+                    let titelHoehe = textHoehe(titel, font: .boldSystemFont(ofSize: 16), width: contentWidth - 124)
+                    let meta1Hoehe = textHoehe(meta1, font: .systemFont(ofSize: 12), width: contentWidth - 28)
+                    let meta2Hoehe = textHoehe(meta2, font: .systemFont(ofSize: 12), width: contentWidth - 28)
+                    let beschreibungTitelHoehe = textHoehe(beschreibungTitel, font: .boldSystemFont(ofSize: 13), width: contentWidth - 28)
+                    let beschreibungHoehe = textHoehe(beschreibungText, font: .systemFont(ofSize: 13), width: contentWidth - 28)
+                    let fotoTitelHoehe = eintrag.fotoPfade.isEmpty ? 0 : textHoehe(fotosTitel, font: .boldSystemFont(ofSize: 13), width: contentWidth - 28)
+                    let fotoHoehe = berechneFotoHoehe(anzahl: eintrag.fotoPfade.count)
+
+                    let blockHoehe =
+                        16 + titelHoehe +
+                        8 + meta1Hoehe +
+                        4 + meta2Hoehe +
+                        12 + beschreibungTitelHoehe +
+                        6 + beschreibungHoehe +
+                        (eintrag.fotoPfade.isEmpty ? 0 : (14 + fotoTitelHoehe + 8 + fotoHoehe)) +
+                        16
+
+                    neueSeiteWennNoetig(blockHoehe + 14)
+
+                    let boxRect = CGRect(x: margin, y: y, width: contentWidth, height: blockHoehe)
+                    zeichneAbgerundeteBox(
+                        rect: boxRect,
+                        fill: UIColor.white,
+                        stroke: UIColor.systemGray5
+                    )
+
+                    var innerY = boxRect.minY + 16
+                    let innerX = boxRect.minX + 14
+                    let innerWidth = boxRect.width - 28
+
+                    let statusFarbe = statusUIColor(eintrag.status)
+                    let prioritaetFarbe = prioritaetUIColor(eintrag.prioritaet)
+
+                    let statusBadgeRect = CGRect(x: boxRect.maxX - 102, y: boxRect.minY + 14, width: 88, height: 22)
+                    zeichneAbgerundeteBox(
+                        rect: statusBadgeRect,
+                        fill: statusFarbe.withAlphaComponent(0.12),
+                        radius: 11
+                    )
+
+                    _ = zeichneText(
+                        eintrag.status.anzeigeText,
+                        font: .boldSystemFont(ofSize: 10),
+                        color: statusFarbe,
+                        x: statusBadgeRect.minX,
+                        y: statusBadgeRect.minY + 6,
+                        width: statusBadgeRect.width,
+                        alignment: .center
+                    )
+
+                    let gezeichneteTitelHoehe = zeichneText(
+                        titel,
+                        font: .boldSystemFont(ofSize: 16),
+                        color: .black,
+                        x: innerX,
+                        y: innerY,
+                        width: innerWidth - 96
+                    )
+                    innerY += gezeichneteTitelHoehe + 8
+
+                    let meta1Gezeichnet = zeichneText(
+                        meta1,
+                        font: .systemFont(ofSize: 12),
+                        color: .darkGray,
+                        x: innerX,
+                        y: innerY,
+                        width: innerWidth
+                    )
+                    innerY += meta1Gezeichnet + 4
+
+                    let meta2Gezeichnet = zeichneText(
+                        meta2,
+                        font: .systemFont(ofSize: 12),
+                        color: prioritaetFarbe,
+                        x: innerX,
+                        y: innerY,
+                        width: innerWidth
+                    )
+                    innerY += meta2Gezeichnet + 12
+
+                    _ = zeichneText(
+                        beschreibungTitel,
+                        font: .boldSystemFont(ofSize: 13),
+                        color: .black,
+                        x: innerX,
+                        y: innerY,
+                        width: innerWidth
+                    )
+                    innerY += beschreibungTitelHoehe + 6
+
+                    let beschreibungGezeichnet = zeichneText(
+                        beschreibungText,
+                        font: .systemFont(ofSize: 13),
+                        color: .black,
+                        x: innerX,
+                        y: innerY,
+                        width: innerWidth
+                    )
+                    innerY += beschreibungGezeichnet
+
+                    if !eintrag.fotoPfade.isEmpty {
+                        innerY += 14
+
+                        _ = zeichneText(
+                            fotosTitel,
+                            font: .boldSystemFont(ofSize: 13),
+                            color: .black,
+                            x: innerX,
+                            y: innerY,
+                            width: innerWidth
+                        )
+                        innerY += fotoTitelHoehe + 8
+
+                        let gezeichneteFotoHoehe = zeichneFotoBereich(
+                            pfade: eintrag.fotoPfade,
+                            startY: innerY,
+                            inhaltX: innerX,
+                            inhaltBreite: innerWidth
+                        )
+                        innerY += gezeichneteFotoHoehe
+                    }
+
+                    y += blockHoehe + 14
+                }
+
+                context.beginPage()
+                zeichneHeader()
+                y = margin + headerHeight + 16
+
+                zeichneInfoBlock()
+
+                if sortierteEintraege.isEmpty {
+                    let leerRect = CGRect(x: margin, y: y, width: contentWidth, height: 92)
+                    zeichneAbgerundeteBox(
+                        rect: leerRect,
+                        fill: UIColor.secondarySystemBackground,
+                        stroke: UIColor.systemGray5
+                    )
+
+                    _ = zeichneText(
+                        "Keine Einträge vorhanden.".localized,
+                        font: .boldSystemFont(ofSize: 15),
+                        color: .darkGray,
+                        x: leerRect.minX + 16,
+                        y: leerRect.minY + 18,
+                        width: leerRect.width - 32
+                    )
+
+                    _ = zeichneText(
+                        "Lege Einträge an, um einen vollständigen Baustellenbericht zu exportieren.".localized,
+                        font: .systemFont(ofSize: 13),
+                        color: .gray,
+                        x: leerRect.minX + 16,
+                        y: leerRect.minY + 44,
+                        width: leerRect.width - 32
+                    )
+
+                    y += leerRect.height + 16
+                } else {
+                    for (index, eintrag) in sortierteEintraege.enumerated() {
+                        zeichneEintragBlock(eintrag, index: index)
+                    }
+                }
+
+                neueSeiteWennNoetig(40)
+
+                _ = zeichneText(
+                    "Bericht automatisch mit BauPilot erstellt.".localized,
+                    font: .italicSystemFont(ofSize: 11),
+                    color: .gray,
+                    x: margin,
+                    y: y + 8,
+                    width: contentWidth
+                )
+
+                zeichneFooter()
             }
 
             return url
@@ -425,6 +758,66 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) { }
+}
+
+struct PDFKitView: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> PDFView {
+        let pdfView = PDFView()
+        pdfView.autoScales = true
+        pdfView.displayMode = .singlePageContinuous
+        pdfView.displayDirection = .vertical
+        pdfView.backgroundColor = .systemGroupedBackground
+        pdfView.displaysPageBreaks = true
+        pdfView.pageShadowsEnabled = false
+
+        if let document = PDFDocument(url: url) {
+            pdfView.document = document
+        }
+
+        return pdfView
+    }
+
+    func updateUIView(_ pdfView: PDFView, context: Context) {
+        if pdfView.document == nil, let document = PDFDocument(url: url) {
+            pdfView.document = document
+        }
+    }
+}
+
+struct PDFVorschauView: View {
+    let url: URL
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var zeigeShareSheet = false
+
+    var body: some View {
+        NavigationStack {
+            PDFKitView(url: url)
+                .background(Color(.systemGroupedBackground))
+                .navigationTitle("PDF-Vorschau".localized)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Schließen".localized) {
+                            dismiss()
+                        }
+                    }
+
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            zeigeShareSheet = true
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                    }
+                }
+                .sheet(isPresented: $zeigeShareSheet) {
+                    ShareSheet(items: [url])
+                }
+        }
+    }
 }
 
 final class BaustellenSpeicher: ObservableObject {
@@ -822,8 +1215,9 @@ struct BaustellenDetailView: View {
     @State private var kategorieFilter: BaustellenKategorie? = nil
     @State private var suchtext = ""
     @State private var sortierung: Sortierung = .neuesteZuerst
-    @State private var zeigePDFSheet = false
+
     @State private var pdfURL: URL?
+    @State private var zeigePDFVorschau = false
     @State private var zeigePDFFehler = false
     @State private var loeschEintrag: BaustellenEintrag?
 
@@ -954,10 +1348,17 @@ struct BaustellenDetailView: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
-                    guard let aktuelle = aktuelleBaustelle else { return }
-                    pdfURL = PDFExport.exportierePDF(fuer: aktuelle)
-                    zeigePDFSheet = pdfURL != nil
-                    zeigePDFFehler = pdfURL == nil
+                    guard let aktuelle = speicher.aktuelleBaustelle(baustelle) else { return }
+
+                    if let url = PDFExport.exportierePDF(fuer: aktuelle) {
+                        pdfURL = url
+
+                        DispatchQueue.main.async {
+                            zeigePDFVorschau = true
+                        }
+                    } else {
+                        zeigePDFFehler = true
+                    }
                 } label: {
                     Image(systemName: "doc.richtext")
                 }
@@ -976,9 +1377,13 @@ struct BaustellenDetailView: View {
                 baustelle: baustelle
             )
         }
-        .sheet(isPresented: $zeigePDFSheet) {
-            if let pdfURL {
-                ShareSheet(items: [pdfURL])
+        .sheet(isPresented: $zeigePDFVorschau, onDismiss: {
+            pdfURL = nil
+        }) {
+            if let url = pdfURL {
+                PDFVorschauView(url: url)
+            } else {
+                Text("Keine PDF verfügbar")
             }
         }
         .alert("PDF-Fehler".localized, isPresented: $zeigePDFFehler) {
@@ -1617,7 +2022,7 @@ struct FotoAuswahlMehrfachView: View {
                     }
 
                     await MainActor.run {
-                        fotoDatenListe = neueBilder
+                        fotoDatenListe.append(contentsOf: neueBilder)
                     }
                 }
             }

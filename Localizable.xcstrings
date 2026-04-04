@@ -615,6 +615,9 @@
         }
       }
     },
+    "Keine PDF verfügbar" : {
+
+    },
     "Kostenlose Version" : {
       "comment" : "A section that describes the free version of the app.",
       "extractionState" : "stale",
