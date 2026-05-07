@@ -74,6 +74,25 @@ struct PaywallView: View {
                     .subscriptionStoreButtonLabel(.multiline)
                     .subscriptionStoreControlStyle(.buttons)
                     .frame(minHeight: 160, maxHeight: 220)
+
+                Button {
+                    Task {
+                        await store.restorePurchases()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.clockwise.circle.fill")
+                        Text("paywall.restore".localized("Käufe wiederherstellen"))
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.bauPilotBlue)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.bauPilotBlue.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                }
+                .buttonStyle(.plain)
+                .disabled(store.isLoading)
                 
                 }
                 .padding()

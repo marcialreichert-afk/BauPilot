@@ -22,6 +22,7 @@
       }
     },
     "%@: %@" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -65,10 +66,14 @@
         }
       }
     },
+    "%lld%%" : {
+
+    },
     "•" : {
 
     },
     "• %@" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -151,6 +156,9 @@
           }
         }
       }
+    },
+    "Bau" : {
+
     },
     "category.all" : {
       "extractionState" : "manual",
@@ -4544,6 +4552,9 @@
           }
         }
       }
+    },
+    "Pilot" : {
+
     },
     "positions.title" : {
       "extractionState" : "manual",
